@@ -3,7 +3,7 @@ const { useState, useEffect } = React;
 const OfficePlaylist = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [tracks, setTracks] = useState([
-    // Default tracks (will be replaced by Spotify data)
+    // Default tracks
     { id: 1, title: "Warm Brew", artist: "Khruangbin", genre: "Psychedelic Rock", bpm: 85, timeBlock: "morning" },
     { id: 2, title: "Saudade", artist: "João Gilberto", genre: "Bossa Nova", bpm: 78, timeBlock: "morning" },
     { id: 3, title: "Sometimes", artist: "My Bloody Valentine", genre: "Shoegaze", bpm: 82, timeBlock: "morning" },
@@ -52,6 +52,7 @@ const OfficePlaylist = () => {
   const [isLoadingSpotify, setIsLoadingSpotify] = useState(false);
   const [spotifyError, setSpotifyError] = useState(null);
   const [spotifySuccess, setSpotifySuccess] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState('');
   const [newTrack, setNewTrack] = useState({
     title: '', artist: '', genre: '', bpm: '', timeBlock: 'morning'
   });
@@ -83,6 +84,18 @@ const OfficePlaylist = () => {
     return 'active';
   };
 
+  // Helper function to batch array into chunks
+  const chunkArray = (array, size) => {
+    const chunks = [];
+    for (let i = 0; i < array.length; i += size) {
+      chunks.push(array.slice(i, i + size));
+    }
+    return chunks;
+  };
+
+  // Helper function to delay between requests
+  const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
   const loadSpotifyPlaylist = async () => {
     if (!spotifyToken) {
       setSpotifyError('Please paste your Spotify token first!');
@@ -92,45 +105,74 @@ const OfficePlaylist = () => {
     setIsLoadingSpotify(true);
     setSpotifyError(null);
     setSpotifySuccess(false);
+    setLoadingProgress('Fetching playlist...');
 
     try {
+      // Step 1: Fetch playlist tracks
       const playlistResponse = await fetch(`https://api.spotify.com/v1/playlists/${PLAYLIST_ID}/tracks`, {
         headers: { 'Authorization': `Bearer ${spotifyToken}` }
       });
 
       if (!playlistResponse.ok) {
-        throw new Error('Failed to fetch playlist. Token may be expired.');
+        const errorData = await playlistResponse.json();
+        throw new Error(`Failed to fetch playlist: ${errorData.error?.message || 'Token may be expired'}`);
       }
 
       const playlistData = await playlistResponse.json();
+      setLoadingProgress(`Found ${playlistData.items.length} tracks. Fetching BPM data...`);
       
+      // Step 2: Get track IDs
       const trackIds = playlistData.items
         .map(item => item.track?.id)
-        .filter(id => id)
-        .join(',');
-      
-      const audioFeaturesResponse = await fetch(`https://api.spotify.com/v1/audio-features?ids=${trackIds}`, {
-        headers: { 'Authorization': `Bearer ${spotifyToken}` }
-      });
+        .filter(id => id);
 
-      if (!audioFeaturesResponse.ok) {
-        throw new Error('Failed to fetch audio features');
+      if (trackIds.length === 0) {
+        throw new Error('No valid tracks found in playlist');
       }
 
-      const audioFeaturesData = await audioFeaturesResponse.json();
+      // Step 3: Batch track IDs (Spotify allows max 100 per request)
+      const idChunks = chunkArray(trackIds, 50); // Using 50 to be safe
+      const allAudioFeatures = [];
 
+      for (let i = 0; i < idChunks.length; i++) {
+        setLoadingProgress(`Fetching BPM data (batch ${i + 1}/${idChunks.length})...`);
+        
+        const ids = idChunks[i].join(',');
+        const audioFeaturesResponse = await fetch(
+          `https://api.spotify.com/v1/audio-features?ids=${ids}`,
+          { headers: { 'Authorization': `Bearer ${spotifyToken}` } }
+        );
+
+        if (!audioFeaturesResponse.ok) {
+          const errorData = await audioFeaturesResponse.json();
+          console.error('Audio features error:', errorData);
+          throw new Error(`Failed to fetch BPM data: ${errorData.error?.message || 'Unknown error'}`);
+        }
+
+        const audioFeaturesData = await audioFeaturesResponse.json();
+        allAudioFeatures.push(...audioFeaturesData.audio_features);
+        
+        // Small delay between requests to avoid rate limiting
+        if (i < idChunks.length - 1) {
+          await delay(100);
+        }
+      }
+
+      // Step 4: Combine track info with BPM
+      setLoadingProgress('Organizing tracks by time blocks...');
+      
       const spotifyTracks = playlistData.items
         .filter(item => item.track)
         .map((item, index) => {
           const track = item.track;
-          const features = audioFeaturesData.audio_features[index];
-          const bpm = features ? Math.round(features.tempo) : 100;
+          const features = allAudioFeatures[index];
+          const bpm = features?.tempo ? Math.round(features.tempo) : 100;
           
           return {
-            id: track.id,
+            id: track.id || `track-${index}`,
             title: track.name,
             artist: track.artists.map(a => a.name).join(', '),
-            genre: track.album.genres?.[0] || 'Various',
+            genre: track.album.album_type || 'Various',
             bpm: bpm,
             timeBlock: categorizeBPM(bpm),
             spotifyUri: track.uri
@@ -140,10 +182,12 @@ const OfficePlaylist = () => {
       setTracks(spotifyTracks);
       setSpotifySuccess(true);
       setSpotifyError(null);
+      setLoadingProgress('');
     } catch (error) {
       console.error('Spotify error:', error);
       setSpotifyError(error.message);
       setSpotifySuccess(false);
+      setLoadingProgress('');
     } finally {
       setIsLoadingSpotify(false);
     }
@@ -276,6 +320,9 @@ const OfficePlaylist = () => {
                   ? "✅ Token saved! Click 'Load Playlist' to import your music" 
                   : "⚠️ No token saved yet"}
               </p>
+              {loadingProgress && (
+                <p className="text-green-200 text-xs mt-1">{loadingProgress}</p>
+              )}
             </div>
             <button
               onClick={loadSpotifyPlaylist}
