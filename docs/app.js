@@ -47,12 +47,16 @@ const OfficePlaylist = () => {
   ]);
   
   const [isEditing, setIsEditing] = useState(false);
-  const [spotifyToken, setSpotifyToken] = useState(null);
+  const [spotifyToken, setSpotifyToken] = useState('');
+  const [tokenInput, setTokenInput] = useState('');
   const [isLoadingSpotify, setIsLoadingSpotify] = useState(false);
   const [spotifyError, setSpotifyError] = useState(null);
+  const [spotifySuccess, setSpotifySuccess] = useState(false);
   const [newTrack, setNewTrack] = useState({
     title: '', artist: '', genre: '', bpm: '', timeBlock: 'morning'
   });
+
+  const PLAYLIST_ID = '77JYvxU7CqZrP15D9ZXGhr';
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -61,22 +65,11 @@ const OfficePlaylist = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Spotify Authentication
-  useEffect(() => {
-    const hash = window.location.hash;
-    if (hash) {
-      const token = hash.substring(1).split('&').find(elem => elem.startsWith('access_token'))?.split('=')[1];
-      if (token) {
-        setSpotifyToken(token);
-        window.location.hash = '';
-      }
+  const saveToken = () => {
+    if (tokenInput.trim()) {
+      setSpotifyToken(tokenInput.trim());
+      setSpotifyError(null);
     }
-  }, []);
-
-  const loginToSpotify = () => {
-    const scopes = 'playlist-read-private playlist-read-collaborative';
-    const authUrl = `https://accounts.spotify.com/authorize?client_id=${SPOTIFY_CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(scopes)}&response_type=token&show_dialog=true`;
-    window.location.href = authUrl;
   };
 
   const categorizeBPM = (bpm) => {
@@ -85,7 +78,6 @@ const OfficePlaylist = () => {
     if (bpm >= 60 && bpm < 70) return 'focus';
     if (bpm > 90 && bpm < 100) return 'focus';
     if (bpm > 110 && bpm <= 130) return 'afternoon';
-    // Default fallback
     if (bpm < 60) return 'focus';
     if (bpm > 130) return 'afternoon';
     return 'active';
@@ -93,27 +85,29 @@ const OfficePlaylist = () => {
 
   const loadSpotifyPlaylist = async () => {
     if (!spotifyToken) {
-      loginToSpotify();
+      setSpotifyError('Please paste your Spotify token first!');
       return;
     }
 
     setIsLoadingSpotify(true);
     setSpotifyError(null);
+    setSpotifySuccess(false);
 
     try {
-      // Fetch playlist tracks
       const playlistResponse = await fetch(`https://api.spotify.com/v1/playlists/${PLAYLIST_ID}/tracks`, {
         headers: { 'Authorization': `Bearer ${spotifyToken}` }
       });
 
       if (!playlistResponse.ok) {
-        throw new Error('Failed to fetch playlist');
+        throw new Error('Failed to fetch playlist. Token may be expired.');
       }
 
       const playlistData = await playlistResponse.json();
       
-      // Get audio features for all tracks
-      const trackIds = playlistData.items.map(item => item.track.id).filter(id => id).join(',');
+      const trackIds = playlistData.items
+        .map(item => item.track?.id)
+        .filter(id => id)
+        .join(',');
       
       const audioFeaturesResponse = await fetch(`https://api.spotify.com/v1/audio-features?ids=${trackIds}`, {
         headers: { 'Authorization': `Bearer ${spotifyToken}` }
@@ -125,28 +119,31 @@ const OfficePlaylist = () => {
 
       const audioFeaturesData = await audioFeaturesResponse.json();
 
-      // Combine track info with BPM and categorize
-      const spotifyTracks = playlistData.items.map((item, index) => {
-        const track = item.track;
-        const features = audioFeaturesData.audio_features[index];
-        const bpm = features ? Math.round(features.tempo) : 100;
-        
-        return {
-          id: track.id,
-          title: track.name,
-          artist: track.artists.map(a => a.name).join(', '),
-          genre: track.album.album_type || 'Unknown',
-          bpm: bpm,
-          timeBlock: categorizeBPM(bpm),
-          spotifyUri: track.uri
-        };
-      });
+      const spotifyTracks = playlistData.items
+        .filter(item => item.track)
+        .map((item, index) => {
+          const track = item.track;
+          const features = audioFeaturesData.audio_features[index];
+          const bpm = features ? Math.round(features.tempo) : 100;
+          
+          return {
+            id: track.id,
+            title: track.name,
+            artist: track.artists.map(a => a.name).join(', '),
+            genre: track.album.genres?.[0] || 'Various',
+            bpm: bpm,
+            timeBlock: categorizeBPM(bpm),
+            spotifyUri: track.uri
+          };
+        });
 
       setTracks(spotifyTracks);
+      setSpotifySuccess(true);
       setSpotifyError(null);
     } catch (error) {
       console.error('Spotify error:', error);
       setSpotifyError(error.message);
+      setSpotifySuccess(false);
     } finally {
       setIsLoadingSpotify(false);
     }
@@ -246,26 +243,58 @@ const OfficePlaylist = () => {
 
         {/* Spotify Integration Section */}
         <div className="bg-gradient-to-r from-green-500 to-green-600 rounded-2xl shadow-lg p-6 mb-6 text-white">
+          <h3 className="text-xl font-bold mb-4">🎧 Spotify Integration</h3>
+          
+          <div className="bg-white/10 rounded-lg p-4 mb-4">
+            <p className="text-sm mb-3 text-green-50">
+              Paste your Spotify access token below. Get it from: 
+              <a href="https://developer.spotify.com/console/get-playlist/" target="_blank" rel="noopener noreferrer" className="underline ml-1">
+                Spotify Console
+              </a>
+            </p>
+            <div className="flex gap-3">
+              <input
+                type="text"
+                placeholder="Paste your Spotify token here..."
+                value={tokenInput}
+                onChange={(e) => setTokenInput(e.target.value)}
+                className="flex-1 px-4 py-2 rounded-lg text-gray-900 focus:ring-2 focus:ring-green-300"
+              />
+              <button
+                onClick={saveToken}
+                className="px-6 py-2 bg-white text-green-600 font-semibold rounded-lg hover:bg-green-50 transition"
+              >
+                Save Token
+              </button>
+            </div>
+          </div>
+
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-xl font-bold mb-2">🎧 Spotify Integration</h3>
               <p className="text-green-100 text-sm">
                 {spotifyToken 
-                  ? "Connected! Load your 'Sonos Project' playlist" 
-                  : "Connect to automatically import your playlist with BPM data"}
+                  ? "✅ Token saved! Click 'Load Playlist' to import your music" 
+                  : "⚠️ No token saved yet"}
               </p>
             </div>
             <button
               onClick={loadSpotifyPlaylist}
-              disabled={isLoadingSpotify}
-              className="px-6 py-3 bg-white text-green-600 font-semibold rounded-lg hover:bg-green-50 transition disabled:opacity-50"
+              disabled={isLoadingSpotify || !spotifyToken}
+              className="px-6 py-3 bg-white text-green-600 font-semibold rounded-lg hover:bg-green-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isLoadingSpotify ? '⏳ Loading...' : spotifyToken ? '🔄 Load Playlist' : '🔗 Connect Spotify'}
+              {isLoadingSpotify ? '⏳ Loading...' : '🔄 Load Playlist'}
             </button>
           </div>
+          
           {spotifyError && (
             <div className="mt-4 p-3 bg-red-100 text-red-800 rounded-lg text-sm">
-              Error: {spotifyError}. Try reconnecting.
+              ❌ Error: {spotifyError}
+            </div>
+          )}
+          
+          {spotifySuccess && (
+            <div className="mt-4 p-3 bg-green-100 text-green-800 rounded-lg text-sm">
+              ✅ Successfully loaded {tracks.length} tracks from your Spotify playlist!
             </div>
           )}
         </div>
@@ -364,7 +393,7 @@ const OfficePlaylist = () => {
                 <p className="text-xs text-gray-500 mt-1">{block.description}</p>
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-2 max-h-96 overflow-y-auto">
                 {getTracksForBlock(key).map(track => (
                   <div
                     key={track.id}
