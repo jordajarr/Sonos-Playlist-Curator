@@ -3,7 +3,7 @@ const { useState, useEffect } = React;
 const OfficePlaylist = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [tracks, setTracks] = useState([
-    // Morning Gentle Start (70-90 BPM) - 10 songs
+    // Default tracks (will be replaced by Spotify data)
     { id: 1, title: "Warm Brew", artist: "Khruangbin", genre: "Psychedelic Rock", bpm: 85, timeBlock: "morning" },
     { id: 2, title: "Saudade", artist: "João Gilberto", genre: "Bossa Nova", bpm: 78, timeBlock: "morning" },
     { id: 3, title: "Sometimes", artist: "My Bloody Valentine", genre: "Shoegaze", bpm: 82, timeBlock: "morning" },
@@ -14,8 +14,6 @@ const OfficePlaylist = () => {
     { id: 8, title: "A Case of You", artist: "Joni Mitchell", genre: "Folk", bpm: 76, timeBlock: "morning" },
     { id: 9, title: "Yegelle Tezeta", artist: "Mahmoud Ahmed", genre: "Ethiopian Jazz", bpm: 86, timeBlock: "morning" },
     { id: 10, title: "Dreams", artist: "Fleetwood Mac", genre: "Soft Rock", bpm: 89, timeBlock: "morning" },
-    
-    // Active Collaboration (100-110 BPM) - 10 songs
     { id: 11, title: "Plastic Love", artist: "Mariya Takeuchi", genre: "City Pop", bpm: 108, timeBlock: "active" },
     { id: 12, title: "Levitating", artist: "Dua Lipa", genre: "Contemporary Pop", bpm: 103, timeBlock: "active" },
     { id: 13, title: "Mambo No. 5", artist: "Pérez Prado", genre: "Salsa", bpm: 105, timeBlock: "active" },
@@ -26,8 +24,6 @@ const OfficePlaylist = () => {
     { id: 18, title: "Ain't No Mountain High Enough", artist: "Marvin Gaye & Tammi Terrell", genre: "Soul", bpm: 108, timeBlock: "active" },
     { id: 19, title: "Oye Como Va", artist: "Santana", genre: "Latin Rock", bpm: 102, timeBlock: "active" },
     { id: 20, title: "The Less I Know The Better", artist: "Tame Impala", genre: "Psychedelic Rock", bpm: 107, timeBlock: "active" },
-    
-    // Focus Flow (60-90 BPM) - 10 songs
     { id: 21, title: "Avril 14th", artist: "Aphex Twin", genre: "Beats", bpm: 68, timeBlock: "focus" },
     { id: 22, title: "Resonance", artist: "Home", genre: "Synth Wave", bpm: 75, timeBlock: "focus" },
     { id: 23, title: "Blue in Green", artist: "Miles Davis", genre: "Jazz", bpm: 70, timeBlock: "focus" },
@@ -38,8 +34,6 @@ const OfficePlaylist = () => {
     { id: 28, title: "Breathe", artist: "Télépopmusik", genre: "Downtempo", bpm: 72, timeBlock: "focus" },
     { id: 29, title: "Awake", artist: "Tycho", genre: "Synth Wave", bpm: 85, timeBlock: "focus" },
     { id: 30, title: "Comptine d'un autre été", artist: "Yann Tiersen", genre: "French Jazz", bpm: 63, timeBlock: "focus" },
-    
-    // Afternoon Energy (100-130 BPM) - 10 songs
     { id: 31, title: "Get Lucky", artist: "Daft Punk", genre: "Funk", bpm: 116, timeBlock: "afternoon" },
     { id: 32, title: "Gecko", artist: "Oliver Heldens", genre: "House", bpm: 128, timeBlock: "afternoon" },
     { id: 33, title: "Money Machine", artist: "100 gecs", genre: "Hyperpop", bpm: 125, timeBlock: "afternoon" },
@@ -53,6 +47,9 @@ const OfficePlaylist = () => {
   ]);
   
   const [isEditing, setIsEditing] = useState(false);
+  const [spotifyToken, setSpotifyToken] = useState(null);
+  const [isLoadingSpotify, setIsLoadingSpotify] = useState(false);
+  const [spotifyError, setSpotifyError] = useState(null);
   const [newTrack, setNewTrack] = useState({
     title: '', artist: '', genre: '', bpm: '', timeBlock: 'morning'
   });
@@ -63,6 +60,97 @@ const OfficePlaylist = () => {
     }, 60000);
     return () => clearInterval(timer);
   }, []);
+
+  // Spotify Authentication
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash) {
+      const token = hash.substring(1).split('&').find(elem => elem.startsWith('access_token'))?.split('=')[1];
+      if (token) {
+        setSpotifyToken(token);
+        window.location.hash = '';
+      }
+    }
+  }, []);
+
+  const loginToSpotify = () => {
+    const scopes = 'playlist-read-private playlist-read-collaborative';
+    const authUrl = `https://accounts.spotify.com/authorize?client_id=${SPOTIFY_CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(scopes)}&response_type=token&show_dialog=true`;
+    window.location.href = authUrl;
+  };
+
+  const categorizeBPM = (bpm) => {
+    if (bpm >= 70 && bpm <= 90) return 'morning';
+    if (bpm >= 100 && bpm <= 110) return 'active';
+    if (bpm >= 60 && bpm < 70) return 'focus';
+    if (bpm > 90 && bpm < 100) return 'focus';
+    if (bpm > 110 && bpm <= 130) return 'afternoon';
+    // Default fallback
+    if (bpm < 60) return 'focus';
+    if (bpm > 130) return 'afternoon';
+    return 'active';
+  };
+
+  const loadSpotifyPlaylist = async () => {
+    if (!spotifyToken) {
+      loginToSpotify();
+      return;
+    }
+
+    setIsLoadingSpotify(true);
+    setSpotifyError(null);
+
+    try {
+      // Fetch playlist tracks
+      const playlistResponse = await fetch(`https://api.spotify.com/v1/playlists/${PLAYLIST_ID}/tracks`, {
+        headers: { 'Authorization': `Bearer ${spotifyToken}` }
+      });
+
+      if (!playlistResponse.ok) {
+        throw new Error('Failed to fetch playlist');
+      }
+
+      const playlistData = await playlistResponse.json();
+      
+      // Get audio features for all tracks
+      const trackIds = playlistData.items.map(item => item.track.id).filter(id => id).join(',');
+      
+      const audioFeaturesResponse = await fetch(`https://api.spotify.com/v1/audio-features?ids=${trackIds}`, {
+        headers: { 'Authorization': `Bearer ${spotifyToken}` }
+      });
+
+      if (!audioFeaturesResponse.ok) {
+        throw new Error('Failed to fetch audio features');
+      }
+
+      const audioFeaturesData = await audioFeaturesResponse.json();
+
+      // Combine track info with BPM and categorize
+      const spotifyTracks = playlistData.items.map((item, index) => {
+        const track = item.track;
+        const features = audioFeaturesData.audio_features[index];
+        const bpm = features ? Math.round(features.tempo) : 100;
+        
+        return {
+          id: track.id,
+          title: track.name,
+          artist: track.artists.map(a => a.name).join(', '),
+          genre: track.album.album_type || 'Unknown',
+          bpm: bpm,
+          timeBlock: categorizeBPM(bpm),
+          spotifyUri: track.uri
+        };
+      });
+
+      setTracks(spotifyTracks);
+      setSpotifyError(null);
+    } catch (error) {
+      console.error('Spotify error:', error);
+      setSpotifyError(error.message);
+    } finally {
+      setIsLoadingSpotify(false);
+    }
+  };
 
   const getCurrentTimeBlock = () => {
     const hours = currentTime.getHours();
@@ -154,6 +242,32 @@ const OfficePlaylist = () => {
               <p className="text-sm text-gray-500">Eastern Time</p>
             </div>
           </div>
+        </div>
+
+        {/* Spotify Integration Section */}
+        <div className="bg-gradient-to-r from-green-500 to-green-600 rounded-2xl shadow-lg p-6 mb-6 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-xl font-bold mb-2">🎧 Spotify Integration</h3>
+              <p className="text-green-100 text-sm">
+                {spotifyToken 
+                  ? "Connected! Load your 'Sonos Project' playlist" 
+                  : "Connect to automatically import your playlist with BPM data"}
+              </p>
+            </div>
+            <button
+              onClick={loadSpotifyPlaylist}
+              disabled={isLoadingSpotify}
+              className="px-6 py-3 bg-white text-green-600 font-semibold rounded-lg hover:bg-green-50 transition disabled:opacity-50"
+            >
+              {isLoadingSpotify ? '⏳ Loading...' : spotifyToken ? '🔄 Load Playlist' : '🔗 Connect Spotify'}
+            </button>
+          </div>
+          {spotifyError && (
+            <div className="mt-4 p-3 bg-red-100 text-red-800 rounded-lg text-sm">
+              Error: {spotifyError}. Try reconnecting.
+            </div>
+          )}
         </div>
 
         {currentBlock !== 'off-hours' && (
@@ -277,20 +391,6 @@ const OfficePlaylist = () => {
               </div>
             </div>
           ))}
-        </div>
-
-        <div className="mt-6 bg-blue-50 border border-blue-200 rounded-2xl p-6">
-          <h3 className="text-lg font-semibold text-blue-900 mb-2">🎵 Ready for Spotify Integration</h3>
-          <p className="text-sm text-blue-800 mb-3">
-            This site is structured to connect with Spotify's API. To enable automatic playlist sync:
-          </p>
-          <ol className="text-sm text-blue-800 space-y-1 ml-4 list-decimal">
-            <li>Create a Spotify Developer App at developer.spotify.com</li>
-            <li>Get your Client ID and Client Secret</li>
-            <li>Set up OAuth 2.0 authentication</li>
-            <li>Use the Web API to fetch tracks from "Sonos Project" playlist</li>
-            <li>Parse BPM from Spotify's audio features endpoint</li>
-          </ol>
         </div>
       </div>
     </div>
